@@ -1,11 +1,12 @@
 """Support for IoTaWatt Energy monitor."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 from typing import override
 
 from homeassistant.components.sensor import (
+    DOMAIN as SENSOR_DOMAIN,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
@@ -22,14 +23,14 @@ from homeassistant.const import (
     UnitOfReactivePower,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import dt as dt_util
+from homeassistant.util import dt as dt_util, slugify
 
 from .const import VOLT_AMPERE_REACTIVE_HOURS
-from .coordinator import IotawattConfigEntry, IotawattUpdater
+from .coordinator import IotawattConfigEntry, IotawattUpdater, iotawatt_device_info
 from .iotawattpy_nosignal.sensor import Sensor
 
 _LOGGER = logging.getLogger(__name__)
@@ -126,6 +127,10 @@ async def async_setup_entry(
         description = ENTITY_DESCRIPTION_KEY_MAP.get(
             data.getUnit(), IotaWattSensorEntityDescription(key="base_sensor")
         )
+        if data.getType() == "Output":
+            # Outputs are defined by the user on the device. Core always showed
+            # them (they had no registry entry), so keep them enabled.
+            description = replace(description, entity_registry_enabled_default=True)
 
         return IotaWattSensor(
             coordinator=coordinator,
@@ -164,16 +169,26 @@ class IotaWattSensor(CoordinatorEntity[IotawattUpdater], SensorEntity):
 
         self._key = key
         data = self._sensor_data
-        # An entity without a unique ID cannot be attached to a device.
         if data.getType() == "Input":
-            self._attr_unique_id = (
+            unique_id = (
                 f"{data.hub_mac_address}-input-{data.getChannel()}-{data.getUnit()}"
             )
-            self._attr_device_info = dr.DeviceInfo(
-                connections={(dr.CONNECTION_NETWORK_MAC, data.hub_mac_address)},
-                manufacturer="IoTaWatt",
-                model="IoTaWatt",
+        else:
+            # Matches the llamafilm/iotawatt-hacs fork, so its users keep their
+            # entity registry entries.
+            unique_id = (
+                f"{data.hub_mac_address}-output-{data.getName()}-{data.getUnit()}"
             )
+            # Core registered outputs without a unique ID, so their entity IDs
+            # came from the name alone. Suggest the same entity ID so they don't
+            # gain the device name prefix when first registered.
+            self.entity_id = f"{SENSOR_DOMAIN}.{slugify(data.getName())}"
+        if data.getLifetime():
+            unique_id += "-lifetime"
+        self._attr_unique_id = unique_id
+        self._attr_device_info = iotawatt_device_info(
+            coordinator.config_entry, data.hub_mac_address
+        )
         self.entity_description = entity_description
 
     @property

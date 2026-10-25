@@ -82,7 +82,7 @@ async def test_sensor_type_output(
     assert state is not None
     assert state.state == "243"
     assert state.attributes[ATTR_STATE_CLASS] is SensorStateClass.TOTAL
-    assert state.attributes[ATTR_FRIENDLY_NAME] == "My WattHour Sensor"
+    assert state.attributes[ATTR_FRIENDLY_NAME] == "Test Device My WattHour Sensor"
     assert state.attributes[ATTR_UNIT_OF_MEASUREMENT] == UnitOfEnergy.WATT_HOUR
     assert state.attributes[ATTR_DEVICE_CLASS] == SensorDeviceClass.ENERGY
     assert state.attributes["type"] == "Output"
@@ -95,7 +95,7 @@ async def test_sensor_type_output(
     assert hass.states.get("sensor.my_watthour_sensor") is None
 
 
-async def test_output_sensor_not_attached_to_device(
+async def test_all_sensors_attached_to_device(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
@@ -103,7 +103,7 @@ async def test_output_sensor_not_attached_to_device(
     mock_iotawatt: MagicMock,
     entry: MockConfigEntry,
 ) -> None:
-    """Test only sensors with a unique ID are attached to the device."""
+    """Test input and output sensors share the IoTaWatt device."""
     mock_iotawatt.getSensors.return_value["sensors"] = {
         "my_sensor_key": INPUT_SENSOR,
         "my_watthour_sensor_key": OUTPUT_SENSOR,
@@ -111,20 +111,50 @@ async def test_output_sensor_not_attached_to_device(
     assert await async_setup_component(hass, DOMAIN, {})
     await hass.async_block_till_done()
 
-    device = device_registry.async_get_device_by_connection(
-        (dr.CONNECTION_NETWORK_MAC, "mock-mac"), entry.entry_id
-    )
-    assert device is not None
+    devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert len(devices) == 1
+    device = devices[0]
+    assert device.identifiers == {(DOMAIN, "mock-mac")}
+    assert device.name == "Test Device"
+    assert device.manufacturer == "IoTaWatt"
+    assert device.configuration_url == "http://1.2.3.4"
 
     input_entry = entity_registry.async_get("sensor.test_device_my_sensor")
     assert input_entry is not None
+    assert input_entry.unique_id == "mock-mac-input-1-Watts"
     assert input_entry.device_id == device.id
 
-    # Outputs have no unique ID, hence no registry entry to attach a device to.
-    assert hass.states.get("sensor.my_watthour_sensor") is not None
-    assert entity_registry.async_get("sensor.my_watthour_sensor") is None
+    # Outputs keep the entity ID core gave them, without a device prefix.
+    output_entry = entity_registry.async_get("sensor.my_watthour_sensor")
+    assert output_entry is not None
+    assert output_entry.unique_id == "mock-mac-output-My WattHour Sensor-WattHours"
+    assert output_entry.device_id == device.id
 
     assert "attempts to attach a device to an entity" not in caplog.text
+
+
+async def test_output_sensor_existing_registry_entry(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    mock_iotawatt: MagicMock,
+    entry: MockConfigEntry,
+) -> None:
+    """Test an output registered by llamafilm/iotawatt-hacs keeps its entity."""
+    entity_registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "mock-mac-output-My WattHour Sensor-WattHours",
+        config_entry=entry,
+        suggested_object_id="custom_energy",
+    )
+    mock_iotawatt.getSensors.return_value["sensors"]["my_watthour_sensor_key"] = (
+        OUTPUT_SENSOR
+    )
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.custom_energy") is not None
+    assert hass.states.get("sensor.my_watthour_sensor") is None
 
 
 async def test_sensor_type_output_reactive_power(
@@ -137,6 +167,7 @@ async def test_sensor_type_output_reactive_power(
     assert await async_setup_component(hass, DOMAIN, {})
     await hass.async_block_till_done()
 
+    # Outputs are enabled even though VAR inputs are disabled by default.
     state = hass.states.get("sensor.my_var_sensor")
     assert state is not None
     assert state.state == "500"

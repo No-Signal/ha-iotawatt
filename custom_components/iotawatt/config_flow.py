@@ -17,8 +17,13 @@ from .iotawattpy_nosignal.iotawatt import Iotawatt
 _LOGGER = logging.getLogger(__name__)
 
 
-async def validate_input(hass: HomeAssistant, data: dict[str, str]) -> dict[str, str]:
-    """Validate the user input allows us to connect."""
+async def validate_input(
+    hass: HomeAssistant, data: dict[str, str]
+) -> tuple[dict[str, str], str]:
+    """Validate the user input allows us to connect.
+
+    Return the errors and the device MAC address.
+    """
     iotawatt = Iotawatt(
         "",
         data[CONF_HOST],
@@ -29,15 +34,15 @@ async def validate_input(hass: HomeAssistant, data: dict[str, str]) -> dict[str,
     try:
         is_connected = await iotawatt.connect()
     except CONNECTION_ERRORS:
-        return {"base": "cannot_connect"}
+        return {"base": "cannot_connect"}, ""
     except Exception:
         _LOGGER.exception("Unexpected exception")
-        return {"base": "unknown"}
+        return {"base": "unknown"}, ""
 
     if not is_connected:
-        return {"base": "invalid_auth"}
+        return {"base": "invalid_auth"}, ""
 
-    return {}
+    return {}, iotawatt.getMacAddress()
 
 
 class IOTaWattConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -67,8 +72,9 @@ class IOTaWattConfigFlow(ConfigFlow, domain=DOMAIN):
         if not user_input:
             return self.async_show_form(step_id="user", data_schema=schema)
 
-        if not (errors := await validate_input(self.hass, user_input)):
-            return self.async_create_entry(title=user_input[CONF_HOST], data=user_input)
+        errors, mac = await validate_input(self.hass, user_input)
+        if not errors:
+            return await self._async_create_iotawatt_entry(mac, user_input)
 
         if errors == {"base": "invalid_auth"}:
             self._data.update(user_input)
@@ -98,11 +104,21 @@ class IOTaWattConfigFlow(ConfigFlow, domain=DOMAIN):
 
         data = {**self._data, **user_input}
 
-        if errors := await validate_input(self.hass, data):
+        errors, mac = await validate_input(self.hass, data)
+        if errors:
             return self.async_show_form(
                 step_id="auth", data_schema=data_schema, errors=errors
             )
 
+        return await self._async_create_iotawatt_entry(mac, data)
+
+    async def _async_create_iotawatt_entry(
+        self, mac: str, data: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Create the entry, or update the host of an already configured device."""
+        if mac:
+            await self.async_set_unique_id(mac)
+            self._abort_if_unique_id_configured(updates={CONF_HOST: data[CONF_HOST]})
         return self.async_create_entry(title=data[CONF_HOST], data=data)
 
 

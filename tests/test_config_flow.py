@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import httpx
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.iotawatt.const import DOMAIN
 from homeassistant import config_entries
@@ -42,6 +43,65 @@ async def test_form(hass: HomeAssistant) -> None:
     assert result2["data"] == {
         "host": "1.1.1.1",
     }
+    assert result2["result"].unique_id is None
+
+
+async def test_form_sets_unique_id(hass: HomeAssistant) -> None:
+    """Test the entry's unique ID is the device MAC address."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    with (
+        patch("custom_components.iotawatt.async_setup_entry", return_value=True),
+        patch(
+            "custom_components.iotawatt.config_flow.Iotawatt.connect",
+            return_value=True,
+        ),
+        patch(
+            "custom_components.iotawatt.config_flow.Iotawatt.getMacAddress",
+            return_value="mock-mac",
+        ),
+    ):
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"host": "1.1.1.1"}
+        )
+        await hass.async_block_till_done()
+
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
+    assert result2["result"].unique_id == "mock-mac"
+
+
+async def test_form_already_configured(hass: HomeAssistant) -> None:
+    """Test adding a configured device aborts and updates its host."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="mock-mac", data={"host": "1.2.3.4"}
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    with (
+        patch("custom_components.iotawatt.async_setup_entry", return_value=True),
+        patch(
+            "custom_components.iotawatt.config_flow.Iotawatt.connect",
+            return_value=True,
+        ),
+        patch(
+            "custom_components.iotawatt.config_flow.Iotawatt.getMacAddress",
+            return_value="mock-mac",
+        ),
+    ):
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"host": "1.1.1.1"}
+        )
+        await hass.async_block_till_done()
+
+    assert result2["type"] is FlowResultType.ABORT
+    assert result2["reason"] == "already_configured"
+    assert entry.data == {"host": "1.1.1.1"}
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
 
 
 async def test_form_auth(hass: HomeAssistant) -> None:

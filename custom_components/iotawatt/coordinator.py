@@ -7,11 +7,11 @@ from typing import override
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import httpx_client
+from homeassistant.helpers import device_registry as dr, httpx_client
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONNECTION_ERRORS
+from .const import CONNECTION_ERRORS, DOMAIN
 from .iotawattpy_nosignal.iotawatt import Iotawatt
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +20,18 @@ _LOGGER = logging.getLogger(__name__)
 REQUEST_REFRESH_DEFAULT_COOLDOWN = 5
 
 type IotawattConfigEntry = ConfigEntry[IotawattUpdater]
+
+
+def iotawatt_device_info(entry: IotawattConfigEntry, mac: str) -> dr.DeviceInfo:
+    """Return the device info shared by every entity of an IoTaWatt."""
+    return dr.DeviceInfo(
+        connections={(dr.CONNECTION_NETWORK_MAC, mac)},
+        identifiers={(DOMAIN, mac)},
+        manufacturer="IoTaWatt",
+        model="IoTaWatt",
+        name=entry.title,
+        configuration_url=f"http://{entry.data[CONF_HOST]}",
+    )
 
 
 class IotawattUpdater(DataUpdateCoordinator):
