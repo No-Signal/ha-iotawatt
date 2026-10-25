@@ -9,6 +9,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.iotawatt.const import DOMAIN
 from homeassistant.core import HomeAssistant
 
+from . import EMPTY_DEVICE_STATUS
+
 
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
@@ -35,6 +37,8 @@ def mock_iotawatt_class(entry: MockConfigEntry) -> Generator[MagicMock]:
         instance.update = AsyncMock()
         instance.getSensors.return_value = {"sensors": {}}
         instance.getLiveStatus = AsyncMock(return_value={})
+        instance.getDeviceStatus = AsyncMock(return_value=EMPTY_DEVICE_STATUS)
+        instance.getMacAddress.return_value = "mock-mac"
         yield mock
 
 

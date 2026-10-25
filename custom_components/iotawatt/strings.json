@@ -26,6 +26,47 @@
       }
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "rtc_battery": {
+        "name": "RTC battery"
+      },
+      "uploader": {
+        "name": "{uploader} uploader"
+      }
+    },
+    "sensor": {
+      "datalog_last_entry": {
+        "name": "Datalog last entry"
+      },
+      "free_memory": {
+        "name": "Free memory"
+      },
+      "last_restart": {
+        "name": "Last restart"
+      },
+      "sample_rate": {
+        "name": "Sample rate"
+      },
+      "samples_per_cycle": {
+        "name": "Samples per cycle"
+      },
+      "uploader_last_post": {
+        "name": "{uploader} last upload",
+        "state_attributes": {
+          "message": {
+            "name": "Message"
+          }
+        }
+      },
+      "wifi_connected_since": {
+        "name": "WiFi connected since"
+      },
+      "wifi_signal": {
+        "name": "WiFi signal"
+      }
+    }
+  },
   "options": {
     "error": {
       "invalid_interval": "The interval must be a multiple of 5 seconds",

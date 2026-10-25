@@ -24,3 +24,6 @@ CONF_LIVE_INTERVAL = "live_interval"
 DEFAULT_LIVE_INTERVAL = 1
 MIN_LIVE_INTERVAL = 1
 MAX_LIVE_INTERVAL = 60
+
+# Device status (diagnostic entities) poll interval, in seconds
+STATUS_SCAN_INTERVAL = 60

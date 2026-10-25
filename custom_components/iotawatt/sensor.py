@@ -1,7 +1,8 @@
 """Support for IoTaWatt Energy monitor."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from datetime import datetime
 import logging
 from typing import override
 
@@ -14,11 +15,13 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     PERCENTAGE,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfApparentPower,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
     UnitOfFrequency,
+    UnitOfInformation,
     UnitOfPower,
     UnitOfReactivePower,
 )
@@ -36,7 +39,14 @@ from .coordinator import (
     IotawattUpdater,
     iotawatt_device_info,
 )
+from .entity import (
+    IotaWattStatusEntity,
+    IotaWattStatusEntityDescription,
+    async_add_status_entities,
+    get_uploader,
+)
 from .iotawattpy_nosignal.sensor import Sensor
+from .iotawattpy_nosignal.status import DeviceStatus
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -136,6 +146,118 @@ LIVE_POWER_DESCRIPTION = IotaWattSensorEntityDescription(
 LIVE_UNIQUE_ID_SUFFIX = "-live"
 
 
+@dataclass(frozen=True, kw_only=True)
+class IotaWattStatusSensorEntityDescription(
+    IotaWattStatusEntityDescription, SensorEntityDescription
+):
+    """Describes an IoTaWatt device status sensor."""
+
+    value_fn: Callable[[DeviceStatus], StateType | datetime]
+    attributes_fn: Callable[[DeviceStatus], dict[str, str | None]] | None = None
+
+
+def _current_log_last_entry(status: DeviceStatus) -> datetime | None:
+    """Return the time of the newest record in the current datalog."""
+    if (log := status.getDatalog("Current")) is None:
+        return None
+    return log.lastkey
+
+
+STATUS_SENSOR_DESCRIPTIONS: tuple[IotaWattStatusSensorEntityDescription, ...] = (
+    # A timestamp rather than an uptime counter, which would change every poll.
+    IotaWattStatusSensorEntityDescription(
+        key="last_restart",
+        translation_key="last_restart",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda status: status.stats.starttime if status.stats else None,
+    ),
+    IotaWattStatusSensorEntityDescription(
+        key="wifi_signal",
+        translation_key="wifi_signal",
+        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda status: status.wifi.rssi if status.wifi else None,
+    ),
+    IotaWattStatusSensorEntityDescription(
+        key="wifi_connected_since",
+        translation_key="wifi_connected_since",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_registry_enabled_default=False,
+        value_fn=lambda status: status.wifi.connecttime if status.wifi else None,
+    ),
+    IotaWattStatusSensorEntityDescription(
+        key="free_memory",
+        translation_key="free_memory",
+        device_class=SensorDeviceClass.DATA_SIZE,
+        native_unit_of_measurement=UnitOfInformation.BYTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda status: status.stats.stack if status.stats else None,
+    ),
+    IotaWattStatusSensorEntityDescription(
+        key="sample_rate",
+        translation_key="sample_rate",
+        native_unit_of_measurement="cycles/s",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        entity_registry_enabled_default=False,
+        value_fn=lambda status: status.stats.chanrate if status.stats else None,
+    ),
+    IotaWattStatusSensorEntityDescription(
+        key="samples_per_cycle",
+        translation_key="samples_per_cycle",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        entity_registry_enabled_default=False,
+        value_fn=lambda status: status.stats.cyclerate if status.stats else None,
+    ),
+    IotaWattStatusSensorEntityDescription(
+        key="datalog_last_entry",
+        translation_key="datalog_last_entry",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_registry_enabled_default=False,
+        value_fn=_current_log_last_entry,
+    ),
+)
+
+
+def _uploader_last_post_description(
+    uploader_id: str,
+) -> IotaWattStatusSensorEntityDescription:
+    """Return the description of an uploader's last upload time."""
+
+    def last_post(status: DeviceStatus) -> datetime | None:
+        if (uploader := get_uploader(status, uploader_id)) is None:
+            return None
+        return uploader.lastpost
+
+    def attributes(status: DeviceStatus) -> dict[str, str | None]:
+        uploader = get_uploader(status, uploader_id)
+        return {"message": uploader.message if uploader else None}
+
+    return IotaWattStatusSensorEntityDescription(
+        key=f"uploader_{uploader_id}_last_post",
+        translation_key="uploader_last_post",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=last_post,
+        # Unknown until the first upload; the message may explain why.
+        exists_fn=lambda status: get_uploader(status, uploader_id) is not None,
+        attributes_fn=attributes,
+        uploader_id=uploader_id,
+    )
+
+
+def _status_sensor_descriptions(
+    status: DeviceStatus,
+) -> Iterator[IotaWattStatusSensorEntityDescription]:
+    """Return the status sensor descriptions for a device status."""
+    yield from STATUS_SENSOR_DESCRIPTIONS
+    for uploader in status.uploaders or ():
+        yield _uploader_last_post_description(uploader.id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: IotawattConfigEntry,
@@ -192,6 +314,14 @@ async def async_setup_entry(
         async_add_entities(live_entities)
     _async_remove_stale_live_entities(
         hass, config_entry, {entity.unique_id for entity in live_entities}
+    )
+
+    assert coordinator.status is not None
+    async_add_status_entities(
+        coordinator.status,
+        async_add_entities,
+        _status_sensor_descriptions,
+        IotaWattStatusSensor,
     )
 
 
@@ -357,3 +487,25 @@ class IotaWattLiveSensor(CoordinatorEntity[IotawattLiveUpdater], SensorEntity):
         if reading.value is not None and (func := self.entity_description.value):
             return func(reading.value)
         return reading.value
+
+
+class IotaWattStatusSensor(IotaWattStatusEntity, SensorEntity):
+    """Defines an IoTaWatt device status sensor."""
+
+    # Uploader error messages can change every poll.
+    _unrecorded_attributes = frozenset({"message"})
+    entity_description: IotaWattStatusSensorEntityDescription
+
+    @property
+    @override
+    def native_value(self) -> StateType | datetime:
+        """Return the state of the sensor."""
+        return self._value
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, str | None] | None:
+        """Return the extra state attributes of the entity."""
+        if (func := self.entity_description.attributes_fn) is None:
+            return None
+        return func(self.coordinator.data)

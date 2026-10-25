@@ -6,7 +6,7 @@ from typing import override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, httpx_client
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -19,9 +19,10 @@ from .const import (
     DEFAULT_LIVE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    STATUS_SCAN_INTERVAL,
 )
 from .iotawattpy_nosignal.iotawatt import Iotawatt
-from .iotawattpy_nosignal.status import LiveReading
+from .iotawattpy_nosignal.status import DeviceStatus, LiveReading
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ type IotawattConfigEntry = ConfigEntry[IotawattUpdater]
 
 def iotawatt_device_info(entry: IotawattConfigEntry, mac: str) -> dr.DeviceInfo:
     """Return the device info shared by every entity of an IoTaWatt."""
-    return dr.DeviceInfo(
+    device_info = dr.DeviceInfo(
         connections={(dr.CONNECTION_NETWORK_MAC, mac)},
         identifiers={(DOMAIN, mac)},
         manufacturer="IoTaWatt",
@@ -41,6 +42,12 @@ def iotawatt_device_info(entry: IotawattConfigEntry, mac: str) -> dr.DeviceInfo:
         name=entry.title,
         configuration_url=f"http://{entry.data[CONF_HOST]}",
     )
+    # Only set when known, so a failed status poll doesn't clear it.
+    if (status := entry.runtime_data.status) is not None and (
+        sw_version := status.sw_version
+    ):
+        device_info["sw_version"] = sw_version
+    return device_info
 
 
 class IotawattUpdater(DataUpdateCoordinator):
@@ -49,6 +56,7 @@ class IotawattUpdater(DataUpdateCoordinator):
     api: Iotawatt | None = None
     config_entry: IotawattConfigEntry
     live: IotawattLiveUpdater | None = None
+    status: IotawattStatusUpdater | None = None
 
     def __init__(self, hass: HomeAssistant, entry: IotawattConfigEntry) -> None:
         """Initialize IotaWattUpdater object."""
@@ -141,3 +149,50 @@ class IotawattLiveUpdater(DataUpdateCoordinator[dict[str, LiveReading]]):
             return await self.api.getLiveStatus()
         except CONNECTION_ERRORS as err:
             raise UpdateFailed("Connection failed") from err
+
+
+class IotawattStatusUpdater(DataUpdateCoordinator[DeviceStatus]):
+    """Poll device health information from the IoTaWatt status endpoint."""
+
+    config_entry: IotawattConfigEntry
+
+    def __init__(
+        self, hass: HomeAssistant, entry: IotawattConfigEntry, api: Iotawatt
+    ) -> None:
+        """Initialize the status updater, sharing the main coordinator's API."""
+        super().__init__(
+            hass=hass,
+            logger=_LOGGER,
+            config_entry=entry,
+            name=f"{entry.title} status",
+            update_interval=timedelta(seconds=STATUS_SCAN_INTERVAL),
+        )
+        self.api = api
+
+    @property
+    def sw_version(self) -> str | None:
+        """Return the firmware version from the last status poll."""
+        if self.data is None or self.data.stats is None:
+            return None
+        return self.data.stats.version
+
+    @override
+    async def _async_update_data(self) -> DeviceStatus:
+        """Fetch the device status from the IoTaWatt device."""
+        try:
+            status = await self.api.getDeviceStatus()
+        except CONNECTION_ERRORS as err:
+            raise UpdateFailed("Connection failed") from err
+        if status.stats is not None and status.stats.version:
+            self._async_update_sw_version(status.stats.version)
+        return status
+
+    @callback
+    def _async_update_sw_version(self, sw_version: str) -> None:
+        """Update the device's firmware version, e.g. after a firmware update."""
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device(
+            identifiers={(DOMAIN, self.api.getMacAddress())}
+        )
+        if device is not None and device.sw_version != sw_version:
+            device_registry.async_update_device(device.id, sw_version=sw_version)
