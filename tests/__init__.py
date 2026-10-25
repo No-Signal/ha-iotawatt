@@ -55,3 +55,23 @@ INPUT_TOTAL_SENSOR = Sensor(
     mac_addr="mock-mac",
     fromStart=True,
 )
+OUTPUT_POWER_SENSOR = Sensor(
+    channel="N/A",
+    base_name="Total_power",
+    suffix=None,
+    io_type="Output",
+    unit="Watts",
+    value=2365,
+    begin="",
+    mac_addr="mock-mac",
+)
+INPUT_VOLTAGE_SENSOR = Sensor(
+    channel="0",
+    base_name="Mains",
+    suffix=None,
+    io_type="Input",
+    unit="Volts",
+    value=121.4,
+    begin="",
+    mac_addr="mock-mac",
+)

@@ -3,7 +3,8 @@
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .coordinator import IotawattConfigEntry, IotawattUpdater
+from .const import CONF_LIVE_SENSORS
+from .coordinator import IotawattConfigEntry, IotawattLiveUpdater, IotawattUpdater
 
 PLATFORMS = [Platform.SENSOR]
 
@@ -12,6 +13,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: IotawattConfigEntry) -> 
     """Set up iotawatt from a config entry."""
     coordinator = IotawattUpdater(hass, entry)
     await coordinator.async_config_entry_first_refresh()
+    if entry.options.get(CONF_LIVE_SENSORS):
+        assert coordinator.api is not None
+        coordinator.live = IotawattLiveUpdater(hass, entry, coordinator.api)
+        # A live failure only makes the live sensors unavailable.
+        await coordinator.live.async_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

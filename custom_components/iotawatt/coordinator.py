@@ -13,12 +13,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     CONF_LIFETIME_SENSORS,
+    CONF_LIVE_INTERVAL,
     CONF_SCAN_INTERVAL,
     CONNECTION_ERRORS,
+    DEFAULT_LIVE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
 from .iotawattpy_nosignal.iotawatt import Iotawatt
+from .iotawattpy_nosignal.status import LiveReading
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +48,7 @@ class IotawattUpdater(DataUpdateCoordinator):
 
     api: Iotawatt | None = None
     config_entry: IotawattConfigEntry
+    live: IotawattLiveUpdater | None = None
 
     def __init__(self, hass: HomeAssistant, entry: IotawattConfigEntry) -> None:
         """Initialize IotaWattUpdater object."""
@@ -107,3 +111,33 @@ class IotawattUpdater(DataUpdateCoordinator):
             raise UpdateFailed("Connection failed") from err
         self._last_run = None
         return self.api.getSensors()
+
+
+class IotawattLiveUpdater(DataUpdateCoordinator[dict[str, LiveReading]]):
+    """Poll live (~1 s average) readings from the IoTaWatt status endpoint."""
+
+    config_entry: IotawattConfigEntry
+
+    def __init__(
+        self, hass: HomeAssistant, entry: IotawattConfigEntry, api: Iotawatt
+    ) -> None:
+        """Initialize the live updater, sharing the main coordinator's API."""
+        super().__init__(
+            hass=hass,
+            logger=_LOGGER,
+            config_entry=entry,
+            name=f"{entry.title} live",
+            update_interval=timedelta(
+                seconds=entry.options.get(CONF_LIVE_INTERVAL, DEFAULT_LIVE_INTERVAL)
+            ),
+            always_update=False,
+        )
+        self.api = api
+
+    @override
+    async def _async_update_data(self) -> dict[str, LiveReading]:
+        """Fetch live readings from the IoTaWatt device."""
+        try:
+            return await self.api.getLiveStatus()
+        except CONNECTION_ERRORS as err:
+            raise UpdateFailed("Connection failed") from err

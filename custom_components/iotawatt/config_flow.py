@@ -7,6 +7,7 @@ import probatio
 
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlowWithReload,
@@ -20,18 +21,28 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
 )
 
 from .const import (
     CONF_LIFETIME_SENSORS,
+    CONF_LIVE_INTERVAL,
+    CONF_LIVE_SENSORS,
     CONF_SCAN_INTERVAL,
     CONNECTION_ERRORS,
+    DEFAULT_LIVE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MAX_LIVE_INTERVAL,
     MAX_SCAN_INTERVAL,
+    MIN_LIVE_INTERVAL,
     MIN_SCAN_INTERVAL,
     SCAN_INTERVAL_STEP,
 )
+from .coordinator import IotawattConfigEntry, IotawattUpdater
 from .iotawattpy_nosignal.iotawatt import Iotawatt
 
 _LOGGER = logging.getLogger(__name__)
@@ -149,44 +160,106 @@ class IOTaWattConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(title=data[CONF_HOST], data=data)
 
 
+def _live_sensor_options(coordinator: IotawattUpdater) -> list[SelectOptionDict]:
+    """Return the sensors that can be read live: power inputs and all outputs."""
+    return [
+        SelectOptionDict(value=key, label=sensor.getName())
+        for key, sensor in coordinator.data["sensors"].items()
+        # Energy sensors have a suffix (.wh); the live readings are not energy.
+        if sensor.getSuffix() is None
+        and not sensor.getLifetime()
+        and (sensor.getType() == "Output" or sensor.getUnit() == "Watts")
+    ]
+
+
 class IotawattOptionsFlow(OptionsFlowWithReload):
     """Handle IoTaWatt options."""
+
+    config_entry: IotawattConfigEntry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage the options."""
+        live_options: list[SelectOptionDict] | None = None
+        if (
+            self.config_entry.state is ConfigEntryState.LOADED
+            and self.config_entry.runtime_data.data
+        ):
+            live_options = _live_sensor_options(self.config_entry.runtime_data)
+
         errors: dict[str, str] = {}
         if user_input is not None:
             user_input[CONF_SCAN_INTERVAL] = int(user_input[CONF_SCAN_INTERVAL])
             # NumberSelector only enforces min and max; step is a UI hint.
             if user_input[CONF_SCAN_INTERVAL] % SCAN_INTERVAL_STEP:
                 errors[CONF_SCAN_INTERVAL] = "invalid_interval"
-            else:
+            live_interval = user_input[CONF_LIVE_INTERVAL]
+            if live_interval != int(live_interval):
+                errors[CONF_LIVE_INTERVAL] = "invalid_live_interval"
+            user_input[CONF_LIVE_INTERVAL] = int(live_interval)
+            if live_options is None:
+                # The device is offline: keep the stored live selection.
+                user_input[CONF_LIVE_SENSORS] = self.config_entry.options.get(
+                    CONF_LIVE_SENSORS, []
+                )
+            if not errors:
                 return self.async_create_entry(data=user_input)
 
         options = user_input or self.config_entry.options
-        schema = probatio.Schema(
-            {
-                probatio.Required(
-                    CONF_SCAN_INTERVAL,
-                    default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SCAN_INTERVAL,
-                        max=MAX_SCAN_INTERVAL,
-                        step=SCAN_INTERVAL_STEP,
-                        unit_of_measurement="s",
-                        mode=NumberSelectorMode.BOX,
-                    )
-                ),
-                probatio.Required(
-                    CONF_LIFETIME_SENSORS,
-                    default=options.get(CONF_LIFETIME_SENSORS, False),
-                ): BooleanSelector(),
-            }
+        fields: dict[Any, Any] = {
+            probatio.Required(
+                CONF_SCAN_INTERVAL,
+                default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_SCAN_INTERVAL,
+                    max=MAX_SCAN_INTERVAL,
+                    step=SCAN_INTERVAL_STEP,
+                    unit_of_measurement="s",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            probatio.Required(
+                CONF_LIFETIME_SENSORS,
+                default=options.get(CONF_LIFETIME_SENSORS, False),
+            ): BooleanSelector(),
+        }
+        if live_options is not None:
+            available = {option["value"] for option in live_options}
+            fields[
+                probatio.Optional(
+                    CONF_LIVE_SENSORS,
+                    default=[
+                        key
+                        for key in options.get(CONF_LIVE_SENSORS, [])
+                        if key in available
+                    ],
+                )
+            ] = SelectSelector(
+                SelectSelectorConfig(
+                    options=live_options,
+                    multiple=True,
+                    mode=SelectSelectorMode.LIST,
+                )
+            )
+        fields[
+            probatio.Required(
+                CONF_LIVE_INTERVAL,
+                default=options.get(CONF_LIVE_INTERVAL, DEFAULT_LIVE_INTERVAL),
+            )
+        ] = NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_LIVE_INTERVAL,
+                max=MAX_LIVE_INTERVAL,
+                step=1,
+                unit_of_measurement="s",
+                mode=NumberSelectorMode.BOX,
+            )
         )
-        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="init", data_schema=probatio.Schema(fields), errors=errors
+        )
 
 
 class CannotConnect(HomeAssistantError):

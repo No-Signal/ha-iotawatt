@@ -29,8 +29,13 @@ from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util, slugify
 
-from .const import VOLT_AMPERE_REACTIVE_HOURS
-from .coordinator import IotawattConfigEntry, IotawattUpdater, iotawatt_device_info
+from .const import CONF_LIVE_SENSORS, VOLT_AMPERE_REACTIVE_HOURS
+from .coordinator import (
+    IotawattConfigEntry,
+    IotawattLiveUpdater,
+    IotawattUpdater,
+    iotawatt_device_info,
+)
 from .iotawattpy_nosignal.sensor import Sensor
 
 _LOGGER = logging.getLogger(__name__)
@@ -120,6 +125,17 @@ LIFETIME_ENERGY_DESCRIPTION = IotaWattSensorEntityDescription(
 )
 
 
+# Live power of an input channel, from the device's ~1 s status readings.
+LIVE_POWER_DESCRIPTION = IotaWattSensorEntityDescription(
+    key="Watts_live",
+    native_unit_of_measurement=UnitOfPower.WATT,
+    state_class=SensorStateClass.MEASUREMENT,
+    device_class=SensorDeviceClass.POWER,
+    suggested_display_precision=0,
+)
+LIVE_UNIQUE_ID_SUFFIX = "-live"
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: IotawattConfigEntry,
@@ -164,6 +180,36 @@ async def async_setup_entry(
         async_add_entities(entities)
 
     coordinator.async_add_listener(new_data_received)
+
+    live_entities: list[IotaWattLiveSensor] = []
+    if coordinator.live is not None:
+        live_entities = [
+            IotaWattLiveSensor(coordinator.live, key, coordinator.data["sensors"][key])
+            for key in config_entry.options.get(CONF_LIVE_SENSORS, [])
+            # Skip keys no longer on the device, e.g. a renamed output.
+            if key in coordinator.data["sensors"]
+        ]
+        async_add_entities(live_entities)
+    _async_remove_stale_live_entities(
+        hass, config_entry, {entity.unique_id for entity in live_entities}
+    )
+
+
+@callback
+def _async_remove_stale_live_entities(
+    hass: HomeAssistant, config_entry: IotawattConfigEntry, keep: set[str | None]
+) -> None:
+    """Remove live sensors that are no longer selected from the registry."""
+    entity_registry = er.async_get(hass)
+    for entity_entry in er.async_entries_for_config_entry(
+        entity_registry, config_entry.entry_id
+    ):
+        if (
+            entity_entry.domain == SENSOR_DOMAIN
+            and entity_entry.unique_id.endswith(LIVE_UNIQUE_ID_SUFFIX)
+            and entity_entry.unique_id not in keep
+        ):
+            entity_registry.async_remove(entity_entry.entity_id)
 
 
 class IotaWattSensor(CoordinatorEntity[IotawattUpdater], SensorEntity):
@@ -254,3 +300,60 @@ class IotaWattSensor(CoordinatorEntity[IotawattUpdater], SensorEntity):
             return func(self._sensor_data.getValue())
 
         return self._sensor_data.getValue()
+
+
+class IotaWattLiveSensor(CoordinatorEntity[IotawattLiveUpdater], SensorEntity):
+    """Defines a live IoTaWatt sensor, updated about every second."""
+
+    entity_description: IotaWattSensorEntityDescription
+
+    def __init__(
+        self, coordinator: IotawattLiveUpdater, key: str, sensor: Sensor
+    ) -> None:
+        """Initialize the sensor from the matching standard sensor."""
+        super().__init__(coordinator=coordinator)
+
+        self._key = key
+        self._is_input = sensor.getType() == "Input"
+        mac = sensor.hub_mac_address
+        if self._is_input:
+            self._attr_unique_id = (
+                f"{mac}-input-{sensor.getChannel()}-Watts{LIVE_UNIQUE_ID_SUFFIX}"
+            )
+            self.entity_description = LIVE_POWER_DESCRIPTION
+        else:
+            self._attr_unique_id = (
+                f"{mac}-output-{sensor.getName()}-{sensor.getUnit()}"
+                f"{LIVE_UNIQUE_ID_SUFFIX}"
+            )
+            # The user selected this output, so enable it.
+            self.entity_description = replace(
+                ENTITY_DESCRIPTION_KEY_MAP.get(
+                    sensor.getUnit(),
+                    IotaWattSensorEntityDescription(key="base_sensor"),
+                ),
+                entity_registry_enabled_default=True,
+            )
+        self._attr_name = f"{sensor.getName()} Live"
+        self._attr_device_info = iotawatt_device_info(coordinator.config_entry, mac)
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return if the live reading is available."""
+        return (
+            super().available
+            and self.coordinator.data is not None
+            and self._key in self.coordinator.data
+        )
+
+    @property
+    @override
+    def native_value(self) -> StateType:
+        """Return the state of the sensor."""
+        reading = self.coordinator.data[self._key]
+        if self._is_input:
+            return reading.watts
+        if reading.value is not None and (func := self.entity_description.value):
+            return func(reading.value)
+        return reading.value

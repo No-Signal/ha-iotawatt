@@ -12,6 +12,8 @@ import respx
 
 from custom_components.iotawatt.const import (
     CONF_LIFETIME_SENSORS,
+    CONF_LIVE_INTERVAL,
+    CONF_LIVE_SENSORS,
     CONF_SCAN_INTERVAL,
     DOMAIN,
 )
@@ -54,20 +56,22 @@ async def test_options_flow(
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_SCAN_INTERVAL: 10, CONF_LIFETIME_SENSORS: False}
+    assert entry.options == {
+        CONF_SCAN_INTERVAL: 10,
+        CONF_LIFETIME_SENSORS: False,
+        CONF_LIVE_SENSORS: [],
+        CONF_LIVE_INTERVAL: 1,
+    }
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data.update_interval == timedelta(seconds=10)
     mock_iotawatt.update.assert_called_with(timespan=10, lastUpdate=None)
 
 
 async def test_options_flow_shows_current_value(
-    hass: HomeAssistant, mock_iotawatt: MagicMock
+    hass: HomeAssistant, mock_iotawatt: MagicMock, entry: MockConfigEntry
 ) -> None:
     """Test the form defaults to the stored interval."""
-    entry = MockConfigEntry(
-        domain=DOMAIN, data={"host": HOST}, options={CONF_SCAN_INTERVAL: 60}
-    )
-    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(entry, options={CONF_SCAN_INTERVAL: 60})
     await _setup(hass, entry)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -119,12 +123,10 @@ async def test_configured_interval_used_as_timespan(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     mock_iotawatt: MagicMock,
+    entry: MockConfigEntry,
 ) -> None:
     """Test every poll averages power over the configured interval."""
-    entry = MockConfigEntry(
-        domain=DOMAIN, data={"host": HOST}, options={CONF_SCAN_INTERVAL: 15}
-    )
-    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(entry, options={CONF_SCAN_INTERVAL: 15})
     await _setup(hass, entry)
     mock_iotawatt.update.reset_mock()
 
@@ -215,5 +217,10 @@ async def test_options_flow_lifetime_sensors(
     )
     await hass.async_block_till_done()
 
-    assert entry.options == {CONF_SCAN_INTERVAL: 30, CONF_LIFETIME_SENSORS: True}
+    assert entry.options == {
+        CONF_SCAN_INTERVAL: 30,
+        CONF_LIFETIME_SENSORS: True,
+        CONF_LIVE_SENSORS: [],
+        CONF_LIVE_INTERVAL: 1,
+    }
     assert mock_iotawatt_class.call_args.kwargs["includeLifetimeSensors"] is True

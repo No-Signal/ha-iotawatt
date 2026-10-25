@@ -17,3 +17,10 @@ MAX_SCAN_INTERVAL = 3600
 SCAN_INTERVAL_STEP = 5
 
 CONF_LIFETIME_SENSORS = "lifetime_sensors"
+
+# Library sensor keys (input_{channel}, output_{name}) to poll live
+CONF_LIVE_SENSORS = "live_sensors"
+CONF_LIVE_INTERVAL = "live_interval"
+DEFAULT_LIVE_INTERVAL = 1
+MIN_LIVE_INTERVAL = 1
+MAX_LIVE_INTERVAL = 60

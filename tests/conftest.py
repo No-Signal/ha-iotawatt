@@ -34,6 +34,7 @@ def mock_iotawatt_class(entry: MockConfigEntry) -> Generator[MagicMock]:
         instance.connect = AsyncMock(return_value=True)
         instance.update = AsyncMock()
         instance.getSensors.return_value = {"sensors": {}}
+        instance.getLiveStatus = AsyncMock(return_value={})
         yield mock
 
 
