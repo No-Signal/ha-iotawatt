@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.iotawatt.const import DOMAIN
 from homeassistant.components.sensor import (
+    ATTR_LAST_RESET,
     ATTR_STATE_CLASS,
     SensorDeviceClass,
     SensorStateClass,
@@ -28,7 +29,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from . import INPUT_SENSOR, OUTPUT_SENSOR, VAR_OUTPUT_SENSOR
+from . import (
+    INPUT_LIFETIME_SENSOR,
+    INPUT_SENSOR,
+    INPUT_TOTAL_SENSOR,
+    OUTPUT_SENSOR,
+    VAR_OUTPUT_SENSOR,
+)
 
 
 async def test_sensor_type_input(
@@ -177,3 +184,58 @@ async def test_sensor_type_output_reactive_power(
         == UnitOfReactivePower.VOLT_AMPERE_REACTIVE
     )
     assert state.attributes[ATTR_DEVICE_CLASS] == SensorDeviceClass.REACTIVE_POWER
+
+
+async def test_lifetime_sensor(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    mock_iotawatt: MagicMock,
+) -> None:
+    """Test lifetime sensors are meter readings without a last reset."""
+    mock_iotawatt.getSensors.return_value["sensors"] = {
+        "input_1_total_energy": INPUT_TOTAL_SENSOR,
+        "input_1_lifetime_energy": INPUT_LIFETIME_SENSOR,
+    }
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+    # last_reset is set from coordinator updates.
+    await hass.config_entries.async_entries(DOMAIN)[0].runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get("sensor.test_device_my_sensor_wh_lifetime")
+    assert state is not None
+    assert state.state == "1234567.891"
+    assert state.attributes[ATTR_STATE_CLASS] is SensorStateClass.TOTAL_INCREASING
+    assert state.attributes[ATTR_DEVICE_CLASS] == SensorDeviceClass.ENERGY
+    assert state.attributes[ATTR_UNIT_OF_MEASUREMENT] == UnitOfEnergy.WATT_HOUR
+    assert ATTR_LAST_RESET not in state.attributes
+    lifetime_entry = entity_registry.async_get(state.entity_id)
+    assert lifetime_entry is not None
+    assert lifetime_entry.unique_id == "mock-mac-input-1-WattHours-lifetime"
+
+    # The daily total shares the unit but not the unique ID or name.
+    total = hass.states.get("sensor.test_device_my_sensor_wh")
+    assert total is not None
+    assert total.attributes[ATTR_STATE_CLASS] is SensorStateClass.TOTAL
+    assert total.attributes[ATTR_LAST_RESET] == "2025-10-25T00:00:00"
+    total_entry = entity_registry.async_get(total.entity_id)
+    assert total_entry is not None
+    assert total_entry.unique_id == "mock-mac-input-1-WattHours"
+
+
+async def test_no_lifetime_sensors_by_default(
+    hass: HomeAssistant, mock_iotawatt_class: MagicMock
+) -> None:
+    """Test lifetime sensors aren't requested without the option."""
+    mock_iotawatt_class.return_value.getSensors.return_value["sensors"] = {
+        "input_1_total_energy": INPUT_TOTAL_SENSOR,
+    }
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    assert mock_iotawatt_class.call_args.kwargs["includeLifetimeSensors"] is False
+    assert not [
+        state
+        for state in hass.states.async_all("sensor")
+        if state.attributes.get(ATTR_STATE_CLASS) == SensorStateClass.TOTAL_INCREASING
+    ]

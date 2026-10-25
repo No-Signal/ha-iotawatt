@@ -27,11 +27,17 @@ def entry(hass: HomeAssistant) -> MockConfigEntry:
 
 
 @pytest.fixture
-def mock_iotawatt(entry: MockConfigEntry) -> Generator[MagicMock]:
-    """Mock iotawatt."""
+def mock_iotawatt_class(entry: MockConfigEntry) -> Generator[MagicMock]:
+    """Mock the iotawatt class."""
     with patch("custom_components.iotawatt.coordinator.Iotawatt") as mock:
         instance = mock.return_value
         instance.connect = AsyncMock(return_value=True)
         instance.update = AsyncMock()
         instance.getSensors.return_value = {"sensors": {}}
-        yield instance
+        yield mock
+
+
+@pytest.fixture
+def mock_iotawatt(mock_iotawatt_class: MagicMock) -> MagicMock:
+    """Mock iotawatt."""
+    return mock_iotawatt_class.return_value

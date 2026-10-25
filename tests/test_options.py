@@ -10,7 +10,11 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 import respx
 
-from custom_components.iotawatt.const import CONF_SCAN_INTERVAL, DOMAIN
+from custom_components.iotawatt.const import (
+    CONF_LIFETIME_SENSORS,
+    CONF_SCAN_INTERVAL,
+    DOMAIN,
+)
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
@@ -50,7 +54,7 @@ async def test_options_flow(
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_SCAN_INTERVAL: 10}
+    assert entry.options == {CONF_SCAN_INTERVAL: 10, CONF_LIFETIME_SENSORS: False}
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data.update_interval == timedelta(seconds=10)
     mock_iotawatt.update.assert_called_with(timespan=10, lastUpdate=None)
@@ -196,3 +200,20 @@ async def test_five_second_poll_with_jitter(
     assert state is not None
     assert state.state != STATE_UNAVAILABLE
     assert state.state == "2000.0"
+
+
+async def test_options_flow_lifetime_sensors(
+    hass: HomeAssistant, mock_iotawatt_class: MagicMock, entry: MockConfigEntry
+) -> None:
+    """Test enabling lifetime sensors reloads with them requested."""
+    await _setup(hass, entry)
+    assert mock_iotawatt_class.call_args.kwargs["includeLifetimeSensors"] is False
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 30, CONF_LIFETIME_SENSORS: True}
+    )
+    await hass.async_block_till_done()
+
+    assert entry.options == {CONF_SCAN_INTERVAL: 30, CONF_LIFETIME_SENSORS: True}
+    assert mock_iotawatt_class.call_args.kwargs["includeLifetimeSensors"] is True

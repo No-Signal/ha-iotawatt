@@ -15,3 +15,5 @@ MIN_SCAN_INTERVAL = 5
 MAX_SCAN_INTERVAL = 3600
 # The IoTaWatt datalog has a 5 second resolution.
 SCAN_INTERVAL_STEP = 5
+
+CONF_LIFETIME_SENSORS = "lifetime_sensors"

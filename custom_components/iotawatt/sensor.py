@@ -110,6 +110,16 @@ ENTITY_DESCRIPTION_KEY_MAP: dict[str, IotaWattSensorEntityDescription] = {
 }
 
 
+# Energy integrated since the start of the device datalog: a meter reading
+# that never resets, unlike the daily totals.
+LIFETIME_ENERGY_DESCRIPTION = IotaWattSensorEntityDescription(
+    key="WattHours_lifetime",
+    native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+    state_class=SensorStateClass.TOTAL_INCREASING,
+    device_class=SensorDeviceClass.ENERGY,
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: IotawattConfigEntry,
@@ -124,9 +134,12 @@ async def async_setup_entry(
         """Create a sensor entity."""
         created.add(key)
         data = coordinator.data["sensors"][key]
-        description = ENTITY_DESCRIPTION_KEY_MAP.get(
-            data.getUnit(), IotaWattSensorEntityDescription(key="base_sensor")
-        )
+        if data.getLifetime():
+            description = LIFETIME_ENERGY_DESCRIPTION
+        else:
+            description = ENTITY_DESCRIPTION_KEY_MAP.get(
+                data.getUnit(), IotaWattSensorEntityDescription(key="base_sensor")
+            )
         if data.getType() == "Output":
             # Outputs are defined by the user on the device. Core always showed
             # them (they had no registry entry), so keep them enabled.
@@ -213,8 +226,10 @@ class IotaWattSensor(CoordinatorEntity[IotawattUpdater], SensorEntity):
                 self.hass.async_create_task(self.async_remove())
             return
 
-        if (begin := self._sensor_data.getBegin()) and (
-            last_reset := dt_util.parse_datetime(begin)
+        if (
+            not self._sensor_data.getLifetime()
+            and (begin := self._sensor_data.getBegin())
+            and (last_reset := dt_util.parse_datetime(begin))
         ):
             self._attr_last_reset = last_reset
 

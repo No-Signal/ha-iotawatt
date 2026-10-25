@@ -16,12 +16,14 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import httpx_client
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
 )
 
 from .const import (
+    CONF_LIFETIME_SENSORS,
     CONF_SCAN_INTERVAL,
     CONNECTION_ERRORS,
     DEFAULT_SCAN_INTERVAL,
@@ -178,6 +180,10 @@ class IotawattOptionsFlow(OptionsFlowWithReload):
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
+                probatio.Required(
+                    CONF_LIFETIME_SENSORS,
+                    default=options.get(CONF_LIFETIME_SENSORS, False),
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

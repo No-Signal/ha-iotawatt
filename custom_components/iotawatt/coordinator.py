@@ -11,7 +11,13 @@ from homeassistant.helpers import device_registry as dr, httpx_client
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONF_SCAN_INTERVAL, CONNECTION_ERRORS, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    CONF_LIFETIME_SENSORS,
+    CONF_SCAN_INTERVAL,
+    CONNECTION_ERRORS,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+)
 from .iotawattpy_nosignal.iotawatt import Iotawatt
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,6 +87,9 @@ class IotawattUpdater(DataUpdateCoordinator):
                 self.config_entry.data.get(CONF_PASSWORD),
                 integratedInterval="d",
                 includeNonTotalSensors=False,
+                includeLifetimeSensors=self.config_entry.options.get(
+                    CONF_LIFETIME_SENSORS, False
+                ),
             )
             try:
                 is_authenticated = await api.connect()

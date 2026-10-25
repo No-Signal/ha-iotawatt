@@ -35,10 +35,12 @@
         "title": "IoTaWatt options",
         "description": "Configure how Home Assistant reads your IoTaWatt.",
         "data": {
-          "scan_interval": "Polling interval"
+          "scan_interval": "Polling interval",
+          "lifetime_sensors": "Lifetime energy sensors"
         },
         "data_description": {
-          "scan_interval": "How often to read all sensors, in seconds (5 to 3600, in steps of 5). Power values are averaged over this interval. Shorter intervals give fresher readings but make more requests to the device (4 per poll). For near-real-time power, use live power sensors instead."
+          "scan_interval": "How often to read all sensors, in seconds (5 to 3600, in steps of 5). Power values are averaged over this interval. Shorter intervals give fresher readings but make more requests to the device (4 per poll). For near-real-time power, use live power sensors instead.",
+          "lifetime_sensors": "Add an energy sensor per power channel that counts up from the start of the device's datalog and never resets. These meter readings suit the Energy dashboard better than the daily totals."
         }
       }
     }
