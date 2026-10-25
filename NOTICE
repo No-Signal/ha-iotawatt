@@ -36,3 +36,12 @@ which contain the bundled library, are distributed as a combined work under
 the GNU General Public License version 3 or later. The integration's own
 files keep their Apache-2.0 notice and may be used separately under that
 licence.
+
+Brand images
+------------
+
+custom_components/iotawatt/brand/ contains the IoTaWatt icon and logo, copied
+unmodified from the Home Assistant brands repository
+(https://github.com/home-assistant/brands, core_integrations/iotawatt/). They
+are trademarks of their owner and are included only to identify the device in
+Home Assistant; they are not covered by this repository's licences.
