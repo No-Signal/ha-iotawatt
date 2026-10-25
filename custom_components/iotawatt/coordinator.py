@@ -4,8 +4,6 @@ from datetime import datetime, timedelta
 import logging
 from typing import override
 
-from iotawattpy.iotawatt import Iotawatt
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -14,6 +12,7 @@ from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CONNECTION_ERRORS
+from .iotawattpy_nosignal.iotawatt import Iotawatt
 
 _LOGGER = logging.getLogger(__name__)
 

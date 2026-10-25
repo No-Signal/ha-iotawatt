@@ -5,8 +5,6 @@ from dataclasses import dataclass
 import logging
 from typing import override
 
-from iotawattpy.sensor import Sensor
-
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -32,6 +30,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import VOLT_AMPERE_REACTIVE_HOURS
 from .coordinator import IotawattConfigEntry, IotawattUpdater
+from .iotawattpy_nosignal.sensor import Sensor
 
 _LOGGER = logging.getLogger(__name__)
 

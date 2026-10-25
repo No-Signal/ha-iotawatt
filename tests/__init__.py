@@ -1,6 +1,6 @@
 """Tests for the IoTaWatt integration."""
 
-from iotawattpy.sensor import Sensor
+from custom_components.iotawatt.iotawattpy_nosignal.sensor import Sensor
 
 INPUT_SENSOR = Sensor(
     channel="1",

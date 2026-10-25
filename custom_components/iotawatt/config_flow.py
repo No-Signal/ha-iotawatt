@@ -3,7 +3,6 @@
 import logging
 from typing import Any, override
 
-from iotawattpy.iotawatt import Iotawatt
 import probatio
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
@@ -13,6 +12,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import httpx_client
 
 from .const import CONNECTION_ERRORS, DOMAIN
+from .iotawattpy_nosignal.iotawatt import Iotawatt
 
 _LOGGER = logging.getLogger(__name__)
 

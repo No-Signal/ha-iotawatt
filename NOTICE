@@ -11,3 +11,28 @@ Version 2.0 (see LICENSE).
 
 Modifications have been made to the original files. They are recorded in this
 repository's git history; the first commit contains the unmodified core files.
+
+Bundled library
+---------------
+
+custom_components/iotawatt/iotawattpy_nosignal/ is a bundled, unmodified
+copy of the iotawattpy-nosignal library (https://github.com/No-Signal/iotawattpy,
+tag v0.4.0, commit 0cad6532349fc417ad142d3de6b191397f6fe921; see SOURCE.json
+in that directory). It is a modified fork of iotawattpy
+(https://github.com/home-assistant-libs/iotawattpy), copyright Greg Diehl,
+Stefan Agner and contributors, licensed under the GNU General Public License
+version 3 or later. Its licence is included as
+custom_components/iotawatt/iotawattpy_nosignal/LICENSE. The copy is generated
+by script/sync_library.py; it is never edited by hand.
+
+Licensing of the combined work
+------------------------------
+
+The integration's own files (everything outside
+custom_components/iotawatt/iotawattpy_nosignal/) are licensed under the
+Apache License, Version 2.0 (see LICENSE). Apache-2.0 code may be combined
+into a GPLv3 work, so the repository and the release zip (iotawatt.zip),
+which contain the bundled library, are distributed as a combined work under
+the GNU General Public License version 3 or later. The integration's own
+files keep their Apache-2.0 notice and may be used separately under that
+licence.

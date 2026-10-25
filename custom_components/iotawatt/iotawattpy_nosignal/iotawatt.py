@@ -1,0 +1,527 @@
+"""High-level interface to an IoTaWatt energy monitoring device.
+
+Modified as part of the iotawattpy-nosignal fork
+(https://github.com/No-Signal/iotawattpy), see README.md.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+import logging
+from typing import Any
+
+import httpx
+
+from .connection import Connection
+from .sensor import Sensor
+from .status import DeviceStatus, LiveReading, parseLiveStatus
+
+LOGGER = logging.getLogger(__name__)
+
+_HTTP_UNAUTHORIZED = 401
+_ROUND_SECONDS = 5
+# The device only parses UNIX times of exactly 10 digits (i.e. after
+# 2001-09-09). Earlier keys fall back to a date the device clamps to the
+# oldest datalog record.
+_MIN_DATALOG_KEY = 1_000_000_000
+_DATALOG_FALLBACK_BEGIN = "2000-01-01"
+
+
+class Iotawatt:
+    """Represent a physical IoTaWatt device and its connected sensors."""
+
+    def __init__(
+        self,
+        device_name: str,
+        ip: str,
+        websession: httpx.AsyncClient,
+        username: str | None = None,
+        password: str | None = None,
+        integratedInterval: str = "y",
+        includeNonTotalSensors: bool = True,
+        includeLifetimeSensors: bool = False,
+        includeTotalSensors: bool = True,
+        integrateReactiveSensors: bool = False,
+    ) -> None:
+        """Initialize the device wrapper.
+
+        :param device_name: Friendly name for the device.
+        :param ip: IP address or hostname of the IoTaWatt.
+        :param websession: Shared httpx async client.
+        :param username: Optional digest-auth username.
+        :param password: Optional digest-auth password.
+        :param integratedInterval: Period for integrated WattHour queries.
+        :param includeNonTotalSensors: Whether to add per-period energy sensors.
+        :param includeLifetimeSensors: Whether to add energy sensors integrating
+            since the start of the device datalog. These are monotonically
+            increasing meter readings independent of any reset period.
+        :param includeTotalSensors: Whether to add energy sensors integrating
+            since the start of the current period (integratedInterval).
+            Disabling this also skips the corresponding device query.
+        :param integrateReactiveSensors: Whether VARh sensors report reactive
+            energy integrated since the start of the device datalog instead
+            of the reactive energy of the last update interval.
+        """
+        self._device_name = device_name
+        self._ip = ip
+        self._connection = Connection(websession, self._ip, username, password)
+        self._integratedInterval = integratedInterval
+        self._includeNonTotalSensors = includeNonTotalSensors
+        self._includeLifetimeSensors = includeLifetimeSensors
+        self._includeTotalSensors = includeTotalSensors
+        self._integrateReactiveSensors = integrateReactiveSensors
+        self._lastUpdateTime: datetime | None = None
+        self._datalogStart: int | None = None
+
+        self._sensors: dict[str, dict[str, Sensor]] = {"sensors": {}}
+
+        self._macAddress = ""
+        self._getMACFlag = False
+
+    async def connect(self) -> bool:
+        """Test the connection and capture the device MAC address."""
+        url = f"http://{self._ip}/status?wifi=yes"
+        results = await self._connection.get(url)
+        if results.status_code == httpx.codes.OK:
+            jsonResults = results.json()
+            self._macAddress = jsonResults["wifi"]["mac"].replace(":", "")
+            LOGGER.debug("MAC: %s", self._macAddress)
+            return True
+        if results.status_code == _HTTP_UNAUTHORIZED:
+            return False
+        results.raise_for_status()
+        return False
+
+    def getSensors(self) -> dict[str, dict[str, Sensor]]:
+        """Return the dict of known sensors."""
+        return self._sensors
+
+    def getMacAddress(self) -> str:
+        """Return the device MAC address captured by ``connect()``.
+
+        The address has its colons removed (e.g. ``deadbeef0001``). It is an
+        empty string until ``connect()`` has succeeded.
+        """
+        return self._macAddress
+
+    async def update(
+        self, timespan: int = 30, lastUpdate: datetime | None = None
+    ) -> None:
+        """Refresh sensor values from the device.
+
+        Raises ``httpx.HTTPError`` if the device cannot be reached or rejects
+        the request (e.g. an authentication failure surfaces as a 401).
+        """
+        if not self._getMACFlag:
+            if not await self.connect():
+                url = f"http://{self._ip}/status?wifi=yes"
+                request = httpx.Request("GET", url)
+                msg = "Authentication with the IoTaWatt device failed"
+                raise httpx.HTTPStatusError(
+                    msg,
+                    request=request,
+                    response=httpx.Response(httpx.codes.UNAUTHORIZED, request=request),
+                )
+            self._getMACFlag = True
+        await self._refreshSensors(timespan, lastUpdate)
+
+    async def getLiveStatus(self) -> dict[str, LiveReading]:
+        """Fetch live readings of all active inputs and outputs.
+
+        Makes a single ``/status?inputs=yes&outputs=yes`` request. The values
+        are the firmware's ~1 second averages, the same data the device's
+        Status page shows, so they react to load changes within about a
+        second. Keys match ``getSensors()`` keys (``input_{channel}``,
+        ``output_{name}``). Does not require ``update()`` to have run.
+
+        Raises ``httpx.HTTPError`` if the device cannot be reached or rejects
+        the request.
+        """
+        response = await self._getInputsandOutputs()
+        return parseLiveStatus(response.json())
+
+    async def getDeviceStatus(self) -> DeviceStatus:
+        """Fetch device health information.
+
+        Makes a single
+        ``/status?device=yes&stats=yes&wifi=yes&datalogs=yes&uploaders=yes``
+        request. UNIX times are returned as aware UTC datetimes (0 as
+        ``None``); fields missing on older firmware are ``None``.
+
+        Raises ``httpx.HTTPError`` if the device cannot be reached or rejects
+        the request.
+        """
+        url = (
+            f"http://{self._ip}/status"
+            "?device=yes&stats=yes&wifi=yes&datalogs=yes&uploaders=yes"
+        )
+        response = await self._connection.get(url)
+        response.raise_for_status()
+        return DeviceStatus.fromJson(response.json())
+
+    def getLastUpdateTime(self) -> datetime | None:
+        """Return the timestamp of the last successful update."""
+        return self._lastUpdateTime
+
+    async def _getInputsandOutputs(self) -> httpx.Response:
+        """Fetch the inputs and outputs status from the device."""
+        url = f"http://{self._ip}/status?inputs=yes&outputs=yes"
+        response = await self._connection.get(url)
+        response.raise_for_status()
+        return response
+
+    def _createOrUpdateSensor(
+        self,
+        sensors: dict[str, Sensor],
+        entity: str,
+        channel_nbr: str,
+        base_name: str,
+        io_type: str,
+        unit: str,
+        suffix: str | None = None,
+        fromStart: bool = False,
+        lifetime: bool = False,
+    ) -> None:
+        """Create or update a single sensor entry."""
+        if entity not in sensors:
+            LOGGER.debug("%s: Creating Channel sensor %s", io_type, entity)
+            sensors[entity] = Sensor(
+                channel_nbr,
+                base_name,
+                suffix,
+                io_type,
+                unit,
+                None,
+                None,
+                self._macAddress,
+                fromStart,
+                lifetime,
+            )
+        else:
+            sensor = sensors[entity]
+            sensor.setBaseName(base_name)
+            sensor.setSuffix(suffix)
+            sensor.setUnit(unit)
+            sensor.setSensorID(self._macAddress)
+            sensor.setFromStart(fromStart)
+            sensor.setLifetime(lifetime)
+
+    def _createOrUpdateSensorSet(
+        self,
+        sensors: dict[str, Sensor],
+        entity: str,
+        channel_nbr: str,
+        base_name: str,
+        io_type: str,
+        unit: str,
+    ) -> None:
+        """Create or update a power sensor and its derived energy sensors."""
+        self._createOrUpdateSensor(
+            sensors, entity, channel_nbr, base_name, io_type, unit
+        )
+
+        # Also add Energy sensors (the integral of Power) for all Power sensors
+        if unit == "Watts":
+            if self._includeTotalSensors:
+                self._createOrUpdateSensor(
+                    sensors,
+                    entity + "_total_energy",
+                    channel_nbr,
+                    base_name,
+                    io_type,
+                    "WattHours",
+                    suffix=".wh",
+                    fromStart=True,
+                )
+            if self._includeNonTotalSensors:
+                self._createOrUpdateSensor(
+                    sensors,
+                    entity + "_energy",
+                    channel_nbr,
+                    base_name,
+                    io_type,
+                    "WattHours",
+                    suffix=".wh",
+                )
+            if self._includeLifetimeSensors:
+                self._createOrUpdateSensor(
+                    sensors,
+                    entity + "_lifetime_energy",
+                    channel_nbr,
+                    base_name,
+                    io_type,
+                    "WattHours",
+                    suffix=".wh",
+                    lifetime=True,
+                )
+
+    async def _refreshSensors(  # noqa: C901, PLR0912, PLR0915
+        self, timespan: int, lastUpdate: datetime | None
+    ) -> None:
+        """Fetch the latest sensor values and update local state."""
+        sensors = self._sensors["sensors"]
+
+        response = await self._getInputsandOutputs()
+        results: dict[str, Any] = response.json()
+        LOGGER.debug("IOResults: %s", results)
+        inputs = results["inputs"]
+        outputs = results["outputs"]
+
+        query_response = await self._getQueryShowSeries()
+        query: dict[str, Any] = query_response.json()
+        LOGGER.debug("Query: %s", query)
+
+        self._removeStaleSensors(sensors, query)
+
+        for i, input_entry in enumerate(inputs):
+            channel_nbr = input_entry["channel"]
+            LOGGER.debug(
+                "In: Channel: %s - Name: %s", channel_nbr, query["series"][i]["name"]
+            )
+            self._createOrUpdateSensorSet(
+                sensors,
+                f"input_{channel_nbr}",
+                channel_nbr,
+                query["series"][i]["name"],
+                "Input",
+                query["series"][i]["unit"],
+            )
+
+        for output_entry in outputs:
+            channel_name = str(output_entry["name"])
+            LOGGER.debug("Out: Name: %s", channel_name)
+            self._createOrUpdateSensorSet(
+                sensors,
+                f"output_{channel_name}",
+                "N/A",
+                channel_name,
+                "Output",
+                output_entry["units"],
+            )
+
+        # Bucket entities by query type based on unit
+        current_query_entities: list[str] = []
+        integrated_total_query_entities: list[str] = []
+        integrated_query_entities: list[str] = []
+        lifetime_query_entities: list[str] = []
+        for entity, sensor in sensors.items():
+            if sensor.getUnit() == "VARh" and self._integrateReactiveSensors:
+                lifetime_query_entities.append(entity)
+            elif sensor.getUnit() != "WattHours":
+                current_query_entities.append(entity)
+            elif sensor.getLifetime():
+                lifetime_query_entities.append(entity)
+            elif sensor.getFromStart():
+                integrated_total_query_entities.append(entity)
+            else:
+                integrated_query_entities.append(entity)
+
+        # Current (right-now) measurements
+        current_query_names = [
+            f"{sensors[entity].getSourceName()}.{sensors[entity].getUnit().lower()}"
+            for entity in current_query_entities
+        ]
+        LOGGER.debug("Sen: %s", current_query_names)
+        response = await self._getQuerySelectSeriesCurrent(
+            current_query_names, timespan
+        )
+        values = response.json()
+        LOGGER.debug("Val: %s", values)
+        if values:
+            for idx, entity in enumerate(current_query_entities):
+                sensors[entity].setValue(values[0][idx])
+
+        # Integrated measurements since the beginning of the period
+        integrated_total_query_names = [
+            sensors[entity].getSourceName()
+            for entity in integrated_total_query_entities
+        ]
+        LOGGER.debug("Sen: %s", integrated_total_query_names)
+        integrate_response = await self._getQuerySelectSeriesIntegrate(
+            integrated_total_query_names, self._integratedInterval
+        )
+        if integrate_response is not None:
+            values = integrate_response.json()
+            LOGGER.debug("Val: %s", values)
+            # The result is empty when the queried interval is zero-length,
+            # e.g. right at the start of the integration period (midnight
+            # for "d"). Keep the previous values until the next update.
+            if values:
+                for idx, entity in enumerate(integrated_total_query_entities):
+                    sensors[entity].setValue(values[0][idx + 1])
+                    sensors[entity].setBegin(values[0][0])
+
+        # Lifetime measurements since the start of the device datalog
+        if lifetime_query_entities:
+            if self._datalogStart is None:
+                self._datalogStart = await self._getDataLogStart()
+            begin = (
+                str(self._datalogStart)
+                if self._datalogStart >= _MIN_DATALOG_KEY
+                else _DATALOG_FALLBACK_BEGIN
+            )
+            # Energy sensors have the .wh query method baked into their
+            # source name since their unit ("WattHours") does not match a
+            # query method. For VARh sensors the unit doubles as the query
+            # method and is appended here.
+            lifetime_query_names = [
+                sensors[entity].getSourceName()
+                + (".varh" if sensors[entity].getUnit() == "VARh" else "")
+                for entity in lifetime_query_entities
+            ]
+            LOGGER.debug("Sen: %s", lifetime_query_names)
+            integrate_response = await self._getQuerySelectSeriesIntegrate(
+                lifetime_query_names, begin, precision=".d3"
+            )
+            if integrate_response is not None:
+                values = integrate_response.json()
+                LOGGER.debug("Val: %s", values)
+                if values:
+                    for idx, entity in enumerate(lifetime_query_entities):
+                        sensors[entity].setValue(values[0][idx + 1])
+                        sensors[entity].setBegin(values[0][0])
+
+        # Integrated measurements since the previous query
+        integrated_query_names = [
+            sensors[entity].getSourceName() for entity in integrated_query_entities
+        ]
+        LOGGER.debug("Sen: %s", integrated_query_names)
+
+        # The iotawatt only knows how to deal with either local timezone or UTC.
+        # A local timezone different from the one set on the iotawatt would yield
+        # incorrect results, so we use UTC.
+        now = datetime.now(tz=UTC)
+
+        # The iotawatt only supports rounded seconds; round down to a 5s boundary.
+        diff = now.second % _ROUND_SECONDS
+        now -= timedelta(seconds=diff, microseconds=now.microsecond)
+
+        if lastUpdate is None:
+            lastUpdate = (
+                now - timedelta(seconds=timespan)
+                if self._lastUpdateTime is None
+                else self._lastUpdateTime
+            )
+        LOGGER.debug(
+            "Querying energy at %s for the past %ss",
+            now.isoformat(),
+            (now - lastUpdate).seconds,
+        )
+        if now == lastUpdate:
+            # Normal when polling at the 5s datalog resolution: scheduling
+            # jitter can land two updates in the same 5s slot. The current
+            # values above were already refreshed.
+            LOGGER.debug(
+                "Nothing to query, update() called too soon, must wait %ss", timespan
+            )
+            return
+        integrate_response = await self._getQuerySelectSeriesIntegrate(
+            integrated_query_names,
+            lastUpdate.isoformat().split("+")[0] + "Z",
+            now.isoformat().split("+")[0] + "Z",
+            precision=".d3",
+        )
+        if integrate_response is not None:
+            values = integrate_response.json()
+            LOGGER.debug("Val: %s", values)
+            if values:
+                for idx, entity in enumerate(integrated_query_entities):
+                    sensors[entity].setValue(values[0][idx + 1])
+                    sensors[entity].setBegin(values[0][0])
+
+        self._lastUpdateTime = now
+
+    @staticmethod
+    def _removeStaleSensors(sensors: dict[str, Sensor], query: dict[str, Any]) -> None:
+        """Drop sensors that no longer appear in the device series list."""
+        series_names = {entry["name"] for entry in query["series"]}
+        keys_to_remove = [
+            entity
+            for entity, sensor in sensors.items()
+            if sensor.getBaseName() not in series_names
+        ]
+        for key in keys_to_remove:
+            LOGGER.debug("Removing stale entity: %s", key)
+            sensors.pop(key)
+
+    async def _getDataLogStart(self) -> int:
+        """Return the UNIX time of the oldest datalog record.
+
+        Prefers the history log over the (shorter) current log. Returns 0
+        if the device does not report a usable datalog start; firmware
+        without datalogs support responds 200 with the key absent.
+        Transport errors propagate like for any other device request so
+        the caller can retry with an accurate datalog start.
+        """
+        url = f"http://{self._ip}/status?datalogs=yes"
+        response = await self._connection.get(url)
+        response.raise_for_status()
+        logs = {log.get("id"): log for log in response.json().get("datalogs", [])}
+        for log_id in ("History", "Current"):
+            if (log := logs.get(log_id)) and log.get("firstkey"):
+                return int(log["firstkey"])
+        return 0
+
+    async def _getQueryShowSeries(self) -> httpx.Response:
+        """Fetch the available series from the device."""
+        url = f"http://{self._ip}/query?show=series"
+        LOGGER.debug("URL: %s", url)
+        response = await self._connection.get(url)
+        response.raise_for_status()
+        return response
+
+    async def _getQuerySelectSeriesCurrent(
+        self, sensor_names: list[str], timespan: int
+    ) -> httpx.Response:
+        """Get current values using the Query API.
+
+        :param sensor_names: List of sensor source names.
+        :param timespan: Interval in seconds; result is averaged over the period.
+        """
+        strSeries = ",".join(sensor_names)
+        url = (
+            f"http://{self._ip}/query"
+            f"?select=[{strSeries}]&begin=s-{timespan}s&end=s&group={timespan}s"
+        )
+        LOGGER.debug("Querying with URL %s", url)
+        response = await self._connection.get(url)
+        response.raise_for_status()
+        return response
+
+    async def _getQuerySelectSeriesIntegrate(
+        self,
+        sensor_names: list[str],
+        start: str,
+        end: str = "s",
+        group: str = "all",
+        precision: str = "",
+    ) -> httpx.Response | None:
+        """Get integrated (summed) values using the Query API.
+
+        When ``group`` is ``"all"`` returns a sum; otherwise returns discrete
+        values. Note that the iotawatt cannot return more than 100kB of data.
+
+        :param sensor_names: List of sensor source names.
+        :param start: Start time. ISO dates supported, plus relative codes:
+
+            - ``y``: Jan 1 of the current year
+            - ``M``: first day of the current month
+            - ``w``: first day of the current week (weeks start on Sunday)
+            - ``d``: the current day
+
+            See https://docs.iotawatt.com/en/02_06_03/query.html#relative-time
+        :param end: End time, same format as ``start``.
+        :param group: Grouping interval (``"all"`` for a single sum).
+        :param precision: Optional precision suffix (e.g. ``".d3"``).
+        """
+        if not sensor_names:
+            return None
+        strSeries = f"{precision},".join(sensor_names) + precision
+        url = (
+            f"http://{self._ip}/query"
+            f"?select=[time.iso,{strSeries}]&begin={start}&end={end}&group={group}"
+        )
+        LOGGER.debug("Querying with URL %s", url)
+        response = await self._connection.get(url)
+        response.raise_for_status()
+        return response
