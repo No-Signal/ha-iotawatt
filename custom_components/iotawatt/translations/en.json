@@ -25,5 +25,22 @@
         }
       }
     }
+  },
+  "options": {
+    "error": {
+      "invalid_interval": "The interval must be a multiple of 5 seconds"
+    },
+    "step": {
+      "init": {
+        "title": "IoTaWatt options",
+        "description": "Configure how Home Assistant reads your IoTaWatt.",
+        "data": {
+          "scan_interval": "Polling interval"
+        },
+        "data_description": {
+          "scan_interval": "How often to read all sensors, in seconds (5 to 3600, in steps of 5). Power values are averaged over this interval. Shorter intervals give fresher readings but make more requests to the device (4 per poll). For near-real-time power, use live power sensors instead."
+        }
+      }
+    }
   }
 }

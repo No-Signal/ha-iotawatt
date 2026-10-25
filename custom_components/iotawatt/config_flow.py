@@ -5,13 +5,31 @@ from typing import Any, override
 
 import probatio
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import httpx_client
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 
-from .const import CONNECTION_ERRORS, DOMAIN
+from .const import (
+    CONF_SCAN_INTERVAL,
+    CONNECTION_ERRORS,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
+    SCAN_INTERVAL_STEP,
+)
 from .iotawattpy_nosignal.iotawatt import Iotawatt
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +71,13 @@ class IOTaWattConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize."""
         self._data: dict[str, Any] = {}
+
+    @staticmethod
+    @callback
+    @override
+    def async_get_options_flow(config_entry: ConfigEntry) -> IotawattOptionsFlow:
+        """Get the options flow for this handler."""
+        return IotawattOptionsFlow()
 
     @override
     async def async_step_user(
@@ -120,6 +145,42 @@ class IOTaWattConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(mac)
             self._abort_if_unique_id_configured(updates={CONF_HOST: data[CONF_HOST]})
         return self.async_create_entry(title=data[CONF_HOST], data=data)
+
+
+class IotawattOptionsFlow(OptionsFlowWithReload):
+    """Handle IoTaWatt options."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the options."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            user_input[CONF_SCAN_INTERVAL] = int(user_input[CONF_SCAN_INTERVAL])
+            # NumberSelector only enforces min and max; step is a UI hint.
+            if user_input[CONF_SCAN_INTERVAL] % SCAN_INTERVAL_STEP:
+                errors[CONF_SCAN_INTERVAL] = "invalid_interval"
+            else:
+                return self.async_create_entry(data=user_input)
+
+        options = user_input or self.config_entry.options
+        schema = probatio.Schema(
+            {
+                probatio.Required(
+                    CONF_SCAN_INTERVAL,
+                    default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SCAN_INTERVAL,
+                        max=MAX_SCAN_INTERVAL,
+                        step=SCAN_INTERVAL_STEP,
+                        unit_of_measurement="s",
+                        mode=NumberSelectorMode.BOX,
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 
 
 class CannotConnect(HomeAssistantError):

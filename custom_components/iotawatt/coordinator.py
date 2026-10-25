@@ -11,7 +11,7 @@ from homeassistant.helpers import device_registry as dr, httpx_client
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONNECTION_ERRORS, DOMAIN
+from .const import CONF_SCAN_INTERVAL, CONNECTION_ERRORS, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .iotawattpy_nosignal.iotawatt import Iotawatt
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,12 +42,13 @@ class IotawattUpdater(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, entry: IotawattConfigEntry) -> None:
         """Initialize IotaWattUpdater object."""
+        interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         super().__init__(
             hass=hass,
             logger=_LOGGER,
             config_entry=entry,
             name=entry.title,
-            update_interval=timedelta(seconds=30),
+            update_interval=timedelta(seconds=interval),
             request_refresh_debouncer=Debouncer(
                 hass,
                 _LOGGER,
@@ -57,6 +58,8 @@ class IotawattUpdater(DataUpdateCoordinator):
         )
 
         self._last_run: datetime | None = None
+        # Power readings are averaged over the poll interval.
+        self._timespan: int = interval
 
     def update_last_run(self, last_run: datetime) -> None:
         """Notify coordinator of a sensor last update time."""
@@ -90,7 +93,7 @@ class IotawattUpdater(DataUpdateCoordinator):
             self.api = api
 
         try:
-            await self.api.update(lastUpdate=self._last_run)
+            await self.api.update(timespan=self._timespan, lastUpdate=self._last_run)
         except CONNECTION_ERRORS as err:
             raise UpdateFailed("Connection failed") from err
         self._last_run = None
