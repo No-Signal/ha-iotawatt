@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build iotawatt.zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Check the bundled library matches its fork tag
+        # Fails on a --dev copy or a hand-edited bundle.
+        run: python script/sync_library.py --check
+      - name: Set the manifest version to the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          path = Path("custom_components/iotawatt/manifest.json")
+          manifest = json.loads(path.read_text())
+          manifest["version"] = os.environ["TAG"]
+          path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+          cat custom_components/iotawatt/manifest.json
+      - name: Zip the integration
+        run: |
+          cd custom_components/iotawatt
+          zip -r "${GITHUB_WORKSPACE}/iotawatt.zip" . -x '__pycache__/*' '*/__pycache__/*'
+      - name: Check the zip contents
+        run: |
+          unzip -l iotawatt.zip
+          for file in manifest.json __init__.py iotawattpy_nosignal/__init__.py \
+              iotawattpy_nosignal/LICENSE iotawattpy_nosignal/SOURCE.json; do
+            unzip -l iotawatt.zip "${file}" > /dev/null \
+              || { echo "missing ${file}" >&2; exit 1; }
+          done
+          if unzip -l iotawatt.zip | grep -q __pycache__; then
+            echo "zip contains __pycache__" >&2
+            exit 1
+          fi
+      - name: Upload the release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "${TAG}" iotawatt.zip --clobber
