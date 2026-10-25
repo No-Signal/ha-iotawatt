@@ -1,0 +1,13 @@
+IoTaWatt custom integration for Home Assistant
+https://github.com/No-Signal/ha-iotawatt
+
+This integration is derived from the IoTaWatt integration in Home Assistant core
+(https://github.com/home-assistant/core, tag 2026.10.4, commit
+357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b), files
+homeassistant/components/iotawatt/ and tests/components/iotawatt/.
+
+Copyright the Home Assistant authors. Licensed under the Apache License,
+Version 2.0 (see LICENSE).
+
+Modifications have been made to the original files. They are recorded in this
+repository's git history; the first commit contains the unmodified core files.
