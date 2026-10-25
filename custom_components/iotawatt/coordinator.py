@@ -191,8 +191,8 @@ class IotawattStatusUpdater(DataUpdateCoordinator[DeviceStatus]):
     def _async_update_sw_version(self, sw_version: str) -> None:
         """Update the device's firmware version, e.g. after a firmware update."""
         device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get_device(
-            identifiers={(DOMAIN, self.api.getMacAddress())}
+        device = device_registry.async_get_device_by_identifier(
+            (DOMAIN, self.api.getMacAddress()), self.config_entry.entry_id
         )
         if device is not None and device.sw_version != sw_version:
             device_registry.async_update_device(device.id, sw_version=sw_version)
