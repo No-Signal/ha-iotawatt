@@ -3,15 +3,14 @@
 from unittest.mock import MagicMock
 
 import httpx
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.components.iotawatt.const import DOMAIN
+from custom_components.iotawatt.const import DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from . import INPUT_SENSOR
-
-from tests.common import MockConfigEntry
 
 
 async def test_setup_unload(

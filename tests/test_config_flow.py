@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import httpx
 
+from custom_components.iotawatt.const import DOMAIN
 from homeassistant import config_entries
-from homeassistant.components.iotawatt.const import DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -21,11 +21,11 @@ async def test_form(hass: HomeAssistant) -> None:
 
     with (
         patch(
-            "homeassistant.components.iotawatt.async_setup_entry",
+            "custom_components.iotawatt.async_setup_entry",
             return_value=True,
         ),
         patch(
-            "homeassistant.components.iotawatt.config_flow.Iotawatt.connect",
+            "custom_components.iotawatt.config_flow.Iotawatt.connect",
             return_value=True,
         ) as mock_setup_entry,
     ):
@@ -54,7 +54,7 @@ async def test_form_auth(hass: HomeAssistant) -> None:
     assert result["step_id"] == "user"
 
     with patch(
-        "homeassistant.components.iotawatt.config_flow.Iotawatt.connect",
+        "custom_components.iotawatt.config_flow.Iotawatt.connect",
         return_value=False,
     ):
         result2 = await hass.config_entries.flow.async_configure(
@@ -67,7 +67,7 @@ async def test_form_auth(hass: HomeAssistant) -> None:
     assert result2["step_id"] == "auth"
 
     with patch(
-        "homeassistant.components.iotawatt.config_flow.Iotawatt.connect",
+        "custom_components.iotawatt.config_flow.Iotawatt.connect",
         return_value=False,
     ):
         result3 = await hass.config_entries.flow.async_configure(
@@ -85,11 +85,11 @@ async def test_form_auth(hass: HomeAssistant) -> None:
 
     with (
         patch(
-            "homeassistant.components.iotawatt.async_setup_entry",
+            "custom_components.iotawatt.async_setup_entry",
             return_value=True,
         ) as mock_setup_entry,
         patch(
-            "homeassistant.components.iotawatt.config_flow.Iotawatt.connect",
+            "custom_components.iotawatt.config_flow.Iotawatt.connect",
             return_value=True,
         ),
     ):
@@ -118,7 +118,7 @@ async def test_form_cannot_connect(hass: HomeAssistant) -> None:
     )
 
     with patch(
-        "homeassistant.components.iotawatt.config_flow.Iotawatt.connect",
+        "custom_components.iotawatt.config_flow.Iotawatt.connect",
         side_effect=httpx.HTTPError("any"),
     ):
         result2 = await hass.config_entries.flow.async_configure(
@@ -137,7 +137,7 @@ async def test_form_setup_exception(hass: HomeAssistant) -> None:
     )
 
     with patch(
-        "homeassistant.components.iotawatt.config_flow.Iotawatt.connect",
+        "custom_components.iotawatt.config_flow.Iotawatt.connect",
         side_effect=Exception,
     ):
         result2 = await hass.config_entries.flow.async_configure(
